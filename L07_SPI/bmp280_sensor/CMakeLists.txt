@@ -45,6 +45,8 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
+    Core/Src/bmp280.c
+    Core/Src/logger.c
 )
 
 # Add include paths
@@ -63,6 +65,10 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
-
+    # Add user defined libraries
+)
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+    -u _printf_float
+    LINKER:-u,_scanf_float
     # Add user defined libraries
 )

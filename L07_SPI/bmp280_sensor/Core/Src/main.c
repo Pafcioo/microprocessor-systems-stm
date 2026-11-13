@@ -19,13 +19,18 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "eth.h"
+#include "spi.h"
+#include "tim.h"
 #include "usart.h"
 #include "usb_otg.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "bmp280.h"
+#include "logger.h"
+#include "string.h"
+#include "stdio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,6 +51,10 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+bmp280_compensation_params calibration;
+
+bool readTempPressRequest = false; // Flag to indicate a temp and pressure read request
+bool printTempPress = false; // Flag to indicate whether to print temp and pressure
 
 /* USER CODE END PV */
 
@@ -58,7 +67,21 @@ static void MPU_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  if(htim->Instance == TIM3)
+  {
+    readTempPressRequest = true; // Set the flag to indicate a light intensity read request
+  }
+}
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if(huart->Instance == USART3)
+  {
+    ReceiveDataByByte(&huart3);
+  }
+}
 /* USER CODE END 0 */
 
 /**
@@ -96,14 +119,43 @@ int main(void)
   MX_ETH_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
+  MX_SPI4_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
+  uint8_t sensor_id = bmp280_init(&hspi4);
+  if (sensor_id != 0x58U)
+  {
+    Error_Handler();
+  }
+  bmp280_read_compensation_params(&hspi4, &calibration);
+  HAL_TIM_Base_Start_IT(&htim3);
+  HAL_UART_Receive_IT(&huart3, &rxByte,1);
 
+  char message[100]; // Message buffer for UART transmission
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    if(commandReady)
+    {
+      commandReady = false;
+      HandleCommand(rxCommand, &printTempPress, &htim3);
+    }
+    if(readTempPressRequest)
+    {
+      readTempPressRequest = false;
+      bmp280_read_raw_data(&hspi4);
+      bmp280_compensate_data(&calibration);
+      LogData(temperature_degC,pressure_Pa/100,&huart3);
+      PrintLastLogs(&huart3);
+      snprintf(message,sizeof(message),"Temp: %.2f [C], Pressure: %.2f [hPa]\r\n",temperature_degC,pressure_Pa/100);
+      if(printTempPress)
+      {
+        HAL_UART_Transmit(&huart3, (uint8_t*)message, strlen(message), HAL_MAX_DELAY);
+      }
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
