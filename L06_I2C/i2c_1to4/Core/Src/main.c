@@ -31,6 +31,7 @@
 #include "string.h"
 #include "stdio.h"
 #include "stdbool.h"
+#include "cJSON.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -67,9 +68,14 @@ uint16_t loggerIndex = 0; // Starting index for light intensity array
 uint16_t loggerFinish = 2; // Default logger array length
 float loggerArray[MAX_LOGGER]; // Array for storing lux measurment
 
+// Controlling led with PWM
 float PWMvalue = 0.0f;
+float PWMstep = 0.5f;
 uint16_t PWMchannel = 0;
 uint16_t compare_value;
+//Static characteristics for led-sensor
+bool do_characteristic = false;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -81,6 +87,41 @@ static void MPU_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+void SendJSONArray(float* loggerArray)
+{
+  uint8_t opening = '[';
+  uint8_t closing[] = "]\r\n";
+  char part_of_message[10];
+  HAL_UART_Transmit(&huart3,&opening,1,HAL_MAX_DELAY); // Opening brackets
+  for(uint8_t i = 0; i < loggerFinish; i++)
+  {
+    char *separator = (i == 0) ? "" : ","; // Before out lux value we have ot either place nothing or comma
+    snprintf(part_of_message, sizeof(part_of_message), "%s%.3f", separator, loggerArray[i]); // Putting together separator and value
+    HAL_UART_Transmit(&huart3, (uint8_t*)part_of_message,(uint16_t)strlen(part_of_message),HAL_MAX_DELAY); //Sending vlaue iwth separator
+  }
+  HAL_UART_Transmit(&huart3,(uint8_t*)closing, sizeof(closing)-1, HAL_MAX_DELAY); // Closing brackets
+}
+
+bool AddCharacteristicPoint(cJSON *points, float pwmPercent, float lux)
+{
+  cJSON *point = cJSON_CreateObject();
+  if (point == NULL)
+  {
+    return false;
+  }
+
+  if (cJSON_AddNumberToObject(point, "pwm_percent", pwmPercent) == NULL ||
+      cJSON_AddNumberToObject(point, "illuminance_lux", lux) == NULL ||
+      !cJSON_AddItemToArray(points, point))
+  {
+    cJSON_Delete(point);
+    return false;
+  }
+
+  return true;
+}
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   if(htim->Instance == TIM3)
@@ -153,22 +194,12 @@ void HandleCommand(const char* command)
       compare_value = __HAL_TIM_GET_COMPARE(&htim4,TIM_CHANNEL_1); // For debugging purposes
     }
   }
+  else if(strcmp(command, "JSON_log") == 0)
+  {
+    do_characteristic = true;
+  }
 }
 
-void SendJSONArray(float* loggerArray)
-{
-  uint8_t opening = '[';
-  uint8_t closing[] = "]\r\n";
-  char part_of_message[10];
-  HAL_UART_Transmit(&huart3,&opening,1,HAL_MAX_DELAY); // Opening brackets
-  for(uint8_t i = 0; i < loggerFinish; i++)
-  {
-    char *separator = (i == 0) ? "" : ","; // Before out lux value we have ot either place nothing or comma
-    snprintf(part_of_message, sizeof(part_of_message), "%s%.3f", separator, loggerArray[i]); // Putting together separator and value
-    HAL_UART_Transmit(&huart3, (uint8_t*)part_of_message,(uint16_t)strlen(part_of_message),HAL_MAX_DELAY); //Sending vlaue iwth separator
-  }
-  HAL_UART_Transmit(&huart3,(uint8_t*)closing, sizeof(closing)-1, HAL_MAX_DELAY); // Closing brackets
-}
 
 void LogLight(float lux)
 {
@@ -233,6 +264,9 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim3); // Start the timer for periodic measurements
   HAL_UART_Receive_IT(&huart3, &rxByte, 1); // Start UART reception in interrupt mode
   HAL_TIM_PWM_Start(&htim4,TIM_CHANNEL_1);
+  //Static characteristic
+  cJSON *points = NULL;
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -244,6 +278,21 @@ int main(void)
       commandReady = false; // Reset the flag
       HandleCommand(rxCommand); // Process the received command
     }
+    if (do_characteristic && points == NULL)
+    {
+      points = cJSON_CreateArray();
+
+      if (points == NULL)
+      {
+        do_characteristic = false;
+      }
+      else
+      {
+        PWMvalue = 0.0f;
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
+        readLightRequest = false;
+      }
+    }
     if(readLightRequest)
     {
       readLightRequest = false; // Reset the flag
@@ -254,6 +303,30 @@ int main(void)
         if(printLightIntensity)
         {
           HAL_UART_Transmit(&huart3, (uint8_t*)message, strlen(message), HAL_MAX_DELAY);
+        }
+        if(do_characteristic && points != NULL)
+        {
+          AddCharacteristicPoint(points,PWMvalue,lux);
+          if(PWMvalue+PWMstep>100.0f)
+          {
+            do_characteristic = false;
+            char *json = cJSON_PrintUnformatted(points);
+            PWMvalue = 0.0f;
+            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
+            if(json != NULL)
+            {
+              HAL_UART_Transmit(&huart3,(uint8_t*)json,(uint16_t)strlen(json), HAL_MAX_DELAY);
+              HAL_UART_Transmit(&huart3, (uint8_t *)"\r\n", 2, HAL_MAX_DELAY);
+              cJSON_free(json);
+            }
+            cJSON_Delete(points);
+            points = NULL;
+          }
+          else
+          {
+            PWMvalue+=PWMstep;
+            __HAL_TIM_SET_COMPARE(&htim4,TIM_CHANNEL_1,PWMvalue*10); // Change the PWM value
+          }
         }
       }
       else
