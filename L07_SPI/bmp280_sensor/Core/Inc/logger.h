@@ -24,6 +24,7 @@ extern float loggerArray[MAX_LOGGER]; // Array for storing lux measurment
 void SendJSONArray(float* loggerArray, UART_HandleTypeDef *huart);
 void HandleCommand(const char* command, bool *printing, TIM_HandleTypeDef *htim);
 void LogData(float temp,float press,UART_HandleTypeDef *huart);
+void LogSamples(float temp,float press,UART_HandleTypeDef *huart);
 void PrintLastLogs(UART_HandleTypeDef *huart);
 void ReceiveDataByByte(UART_HandleTypeDef *huart);
 

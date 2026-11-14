@@ -56,6 +56,10 @@ bmp280_compensation_params calibration;
 bool readTempPressRequest = false; // Flag to indicate a temp and pressure read request
 bool printTempPress = false; // Flag to indicate whether to print temp and pressure
 
+// PWM part of code variables
+float PWMvalue = 0.0f;
+uint16_t PWMchannel = 0;
+uint16_t compare_value;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -121,16 +125,17 @@ int main(void)
   MX_USB_OTG_FS_PCD_Init();
   MX_SPI4_Init();
   MX_TIM3_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
-  uint8_t sensor_id = bmp280_init(&hspi4);
+  uint8_t sensor_id = bmp280_init(&hspi4); // Creating sensor
   if (sensor_id != 0x58U)
   {
     Error_Handler();
   }
   bmp280_read_compensation_params(&hspi4, &calibration);
-  HAL_TIM_Base_Start_IT(&htim3);
-  HAL_UART_Receive_IT(&huart3, &rxByte,1);
-
+  HAL_TIM_Base_Start_IT(&htim3); // Starting timer for reading temp and pressure
+  HAL_UART_Receive_IT(&huart3, &rxByte,1); // UART for receiving data
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1); // PWM for heater resistor curcuit
   char message[100]; // Message buffer for UART transmission
   /* USER CODE END 2 */
 
@@ -141,19 +146,29 @@ int main(void)
     if(commandReady)
     {
       commandReady = false;
-      HandleCommand(rxCommand, &printTempPress, &htim3);
+      HandleCommand(rxCommand, &printTempPress, &htim3); //Definition in logger.c file, handles all srots of commands
+      // Additionally, to handle PWM control over UART
+      if(sscanf(rxCommand, "PWM%hu=%f", &PWMchannel, &PWMvalue) == 2)
+      {
+        if(PWMchannel == 1 && PWMvalue>=0.0f && PWMvalue<=100.0f)
+        {
+          __HAL_TIM_SET_COMPARE(&htim4,TIM_CHANNEL_1,PWMvalue*10); // Change the PWM value
+          compare_value = __HAL_TIM_GET_COMPARE(&htim4,TIM_CHANNEL_1); // For debugging purposes
+        }
+      }
     }
     if(readTempPressRequest)
     {
       readTempPressRequest = false;
       bmp280_read_raw_data(&hspi4);
       bmp280_compensate_data(&calibration);
-      LogData(temperature_degC,pressure_Pa/100,&huart3);
-      PrintLastLogs(&huart3);
+      LogData(temperature_degC,pressure_Pa/100,&huart3); // Logging given numebr of samples and printing at once
+      LogSamples(temperature_degC,pressure_Pa/100,&huart3); // Continuous logging of live plotting of data
+      PrintLastLogs(&huart3); // Printing a given numer of last logs
       snprintf(message,sizeof(message),"Temp: %.2f [C], Pressure: %.2f [hPa]\r\n",temperature_degC,pressure_Pa/100);
       if(printTempPress)
       {
-        HAL_UART_Transmit(&huart3, (uint8_t*)message, strlen(message), HAL_MAX_DELAY);
+        HAL_UART_Transmit(&huart3, (uint8_t*)message, strlen(message), HAL_MAX_DELAY); // Sending a temp and pressure message
       }
     }
     /* USER CODE END WHILE */

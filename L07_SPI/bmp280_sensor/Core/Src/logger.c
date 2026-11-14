@@ -1,5 +1,6 @@
 #include "logger.h"
 
+// UART variables
 uint8_t rxByte;
 char rxCommand[32];
 uint8_t rxLength = 0;
@@ -7,23 +8,34 @@ bool rxDiscard = false;
 bool commandReady = false;
 uint16_t freq = 1;
 
+// Simples logger variables
 bool logger = false;
 uint16_t loggerIndex = 0;
 uint16_t loggerFinish = 2;
 
+// Last logs variables
 bool printLastLogs = false;
 uint16_t lastIndex = 2;
 uint16_t numberOfLogsToPrint = 0;
 static uint16_t logsAvailable = 0;
 
+// Live logs variables
+bool log_live = false;
+uint16_t log_live_samples = 0;
+uint16_t log_live_index = 0;
+
+// Arrays for storing data for logger
 float loggerArrayTemp[MAX_LOGGER];
 float loggerArrayPress[MAX_LOGGER];
 
+// Characters for creating a JSON array
 uint8_t opening = '[';
 uint8_t closing = ']';
 uint8_t comma = ',';
 uint8_t closingWholeJSON[] = "]\r\n";
 
+// Function that sends obly a part of values array, like temp or pressure
+// Needed for sending part of last logs
 void SendJSONArrayCount(const float *values, uint16_t count, UART_HandleTypeDef *huart)
 {
   char part_of_message[32];
@@ -38,11 +50,14 @@ void SendJSONArrayCount(const float *values, uint16_t count, UART_HandleTypeDef 
   HAL_UART_Transmit(huart, &closing, 1, HAL_MAX_DELAY); // Closing brackets
 }
 
+// This function uses the SendJSONArrayCOunt function, but sends the whole array
+// Needed for simple logger
 void SendJSONArray(float *loggerArray, UART_HandleTypeDef *huart)
 {
   SendJSONArrayCount(loggerArray, loggerFinish, huart);
 }
 
+// Function that receive byte by byte via UART
 void ReceiveDataByByte(UART_HandleTypeDef * huart)
 {
     char receivedChar = (char)rxByte; // Convert the received byte to a character
@@ -109,8 +124,19 @@ void HandleCommand(const char* command, bool *printing, TIM_HandleTypeDef *htim)
         numberOfLogsToPrint = requestedPrintCount;
         printLastLogs = true;
     }
+    else if(sscanf(rxCommand, "log_live=%hu", &log_live_samples) == 1)
+    {
+      log_live = true;
+    }
+    else if(strcmp(command, "log_live:stop") == 0)
+    {
+      log_live = false;
+      log_live_index = 0;
+      log_live_samples = 0;
+    }
 }
 
+// Function for logging data, it stores temp and press in arrays that were declared at the start
 void LogData(float temp,float press,UART_HandleTypeDef *huart)
 {
   if(logger && loggerIndex < loggerFinish && loggerFinish <= MAX_LOGGER)
@@ -118,7 +144,7 @@ void LogData(float temp,float press,UART_HandleTypeDef *huart)
     loggerArrayTemp[loggerIndex] = temp;
     loggerArrayPress[loggerIndex] = press;
     loggerIndex++;
-    if(loggerIndex == loggerFinish)
+    if(loggerIndex == loggerFinish) // When we stored the numerb of samples we wanted we disable logger reset indexes and send it via UART
     {
       logger = false;
       loggerIndex = 0;
@@ -132,6 +158,7 @@ void LogData(float temp,float press,UART_HandleTypeDef *huart)
   }
 }
 
+// Function that sends only a part of recent logs
 void PrintLastLogs(UART_HandleTypeDef *huart)
 {
     if(!printLastLogs)
@@ -140,12 +167,13 @@ void PrintLastLogs(UART_HandleTypeDef *huart)
     }
 
     printLastLogs = false;
-    if(logsAvailable == 0 || numberOfLogsToPrint == 0)
+    if(logsAvailable == 0 || numberOfLogsToPrint == 0) //Condition where either we dont hav eany logged data or we want to pirnt 0 samples
     {
         if(numberOfLogsToPrint == 0)
         {
             return;
         }
+        // Sending zeros
         HAL_UART_Transmit(huart, &opening, 1, HAL_MAX_DELAY);
         SendJSONArrayCount(NULL, numberOfLogsToPrint, huart);
         HAL_UART_Transmit(huart, &comma, 1, HAL_MAX_DELAY);
@@ -156,6 +184,7 @@ void PrintLastLogs(UART_HandleTypeDef *huart)
     }
 
     uint16_t count;
+    // If statement to prevent from sending zeros if we want to send more recent logs that we even have logged
     if(numberOfLogsToPrint < logsAvailable)
     {
         count = numberOfLogsToPrint;
@@ -172,4 +201,26 @@ void PrintLastLogs(UART_HandleTypeDef *huart)
     SendJSONArrayCount(&loggerArrayPress[start], count, huart);
     HAL_UART_Transmit(huart, closingWholeJSON, sizeof(closingWholeJSON) - 1,
                       HAL_MAX_DELAY);
+}
+
+//Function for live logging
+void LogSamples(float temp,float press,UART_HandleTypeDef *huart)
+{
+  if(log_live)
+  {
+    if(log_live_index>=log_live_samples)
+    {
+      log_live = false;
+      log_live_index = 0;
+    }
+    else
+    {
+      char part_of_message[32];
+      char *separator = ",";
+      snprintf(part_of_message, sizeof(part_of_message), "[%.3f%s%.3f]\r\n", temp, separator, press); // A single array that later is pared in python script
+      HAL_UART_Transmit(huart, (uint8_t *)part_of_message,(uint16_t)strlen(part_of_message),HAL_MAX_DELAY);
+      log_live_index++;
+    }
+    
+  }
 }
